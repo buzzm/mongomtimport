@@ -1,0 +1,31 @@
+JL=$HOME/java/lib
+
+#  example:   sh runt com.solel.subro.apps.App1
+
+CLASSPATH=\
+dist/lib/subro-apps.jar\
+:$JL/subro-core.jar\
+:$JL/subro-maputils.jar\
+:$JL/subro-dal.jar\
+:$JL/moschetti-core.jar\
+:$JL/moschetti-coremap.jar\
+:$JL/moschetti-maputils.jar\
+:$JL/moschetti-json.jar\
+:$JL/moschetti-mbi.jar\
+:$JL/moschetti-mbd-mongodb.jar\
+:$JL/moschetti-mbd-pg.jar\
+:$JL/jackson-databind-2.1.4.jar\
+:$JL/jackson-core-2.1.4.jar\
+:$JL/jackson-annotations-2.1.4.jar\
+:$JL/mongo-java-driver-2.11.1.jar\
+:$JL/postgresql.jar\
+:$JL/org-slf4j-api-1.7.2.jar\
+:$JL/org-slf4j-log4j12-1.7.2.jar\
+:$JL/log4j-1.2.16.jar
+
+#java -cp $CLASSPATH $*
+java -Xms4000m -Xmx4000m -cp $CLASSPATH $*
+
+
+
+

@@ -1,0 +1,80 @@
+<project name="mongoapps" default="dist" basedir=".">
+
+    <!-- set global properties for this build -->
+    <property name="src.main"   location="src/main"/>
+    <property name="src.test"   location="src/test"/>
+    <property name="build.main" location="build/main"/>
+    <property name="build.test" location="build/test"/>
+    
+    <property name="dist"       location="dist"/>
+    
+    <property name="jl"         value="/Users/buzz/java/lib"/>
+    
+    <property name="junit"      value="${jl}/junit.jar"/>
+
+    <property name="stagedlib"  value="${dist}/lib/mongoapps.jar"/>
+
+    <!-- Three kinds of classpaths:
+	1.  One to compile src/main
+	2.  One to compile src/test
+	3.  One to RUN src/test junits
+      -->
+    <path id="main.compile.classpath">
+      <pathelement location="${jl}/mongo-java-driver-2.12.0.jar" />
+    </path>
+
+    <path id="test.compile.classpath">
+      <path refid="main.compile.classpath" />
+      <pathelement location="${stagedlib}" />
+      <pathelement location="${junit}" />
+
+    </path>
+
+
+    <path id="test.run.classpath">
+      <path refid="test.compile.classpath" />
+      <pathelement     path="${build.test}"/>
+
+      <!-- ONLY need this at runtime! -->
+      <pathelement location="${jl}/mongo-java-driver-2.12.0.jar"/>
+    </path>
+
+
+    <!-- ======================================================== -->
+    <!--  Below here is all based on the above; no need to touch -->
+    <!--     E X C E P T   THE JUNIT test classes; fix TBD!!      -->
+    <!-- ======================================================== -->
+
+
+    <target name="init">
+      <tstamp/>
+      <mkdir dir="${build.main}"/>
+      <mkdir dir="${build.test}"/>
+    </target>
+    
+
+    <target name="compile" depends="init" >
+      <javac srcdir="${src.main}" destdir="${build.main}" debug="on" includeantruntime="false">
+	<classpath>
+	  <path refid="main.compile.classpath" />
+	</classpath>
+      </javac>
+    </target>
+
+
+
+    <target name="dist" depends="compile"
+            description="generate the distribution" >
+      <mkdir dir="${dist}/lib"/>
+      <jar jarfile="${stagedlib}" basedir="${build.main}"/>
+    </target>
+
+
+
+    <target name="clean" >
+      <delete dir="${build.main}"/>
+      <delete dir="${build.test}"/>
+      <delete dir="${dist}"/>
+    </target>
+
+</project>
