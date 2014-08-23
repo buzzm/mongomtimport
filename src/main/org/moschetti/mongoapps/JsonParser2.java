@@ -12,7 +12,9 @@
  * Modified to support mongodb, specifically grooming Maps  -Buzz
  ******************************************************************************/
 
-// Here's the "mongo" dependency.  Not REALLY a dep but...
+// Here's the "mongo" dependency.  Not an additional external dep 
+// because the mongo Java driver jar ALSO contains the org.bson.* 
+// classes.  Whew....
 import org.bson.types.ObjectId;
 
 import java.io.IOException;
@@ -176,7 +178,7 @@ public class JsonParser2 {
 		Object o = null;
 		if((o = m.get("$date")) != null) {
 		    if(o instanceof String) {
-			result = cvtMongoStrDateToDate((String)o);
+			result = Utils.cvtISODateToDate((String)o);
 			
 			//result = new java.util.Date();
 		    } else if(o instanceof Long) {
@@ -563,87 +565,6 @@ public class JsonParser2 {
     }
 
 
-    // buildNumber(s, 0, 4);
-    private static int buildNumber(String s, int idx, int len) {
-	int item = 0;
-
-	// k is going 0 to len-1. i.e. 0 to 3 for year...
-	for(int k = 0; k < len; k++) {
-
-	    // Given 2013, jump to 3 
-	    int nx = idx + (len-1) - k;
-
-	    char c = s.charAt(nx);
-	    switch(k) {
-	    case 3:
-		item += (c - '0') * 1000;
-		break;
-	    case 2:
-		item += (c - '0') * 100;
-		break;
-	    case 1:
-		item += (c - '0') * 10;
-		break;
-	    case 0:
-		item += (c - '0');
-		break;
-	    }
-	}
-
-	return item;
-    }
-
-    /**
-     *  2014-06-23T09:26:26.214-0400
-     *  0123456789012345678901234567890
-     *            1         2     
-     */
-    private static Date cvtMongoStrDateToDate(String s) {
-	int year = 0;
-	int month = 0;
-	int day = 0;
-	
-	int hour = 0;
-	int min = 0;
-	int sec = 0;
-	int msec = 0;
-	int tzhrs = 0;
-	int tzmin = 0;
-
-	
-	year  = buildNumber(s, 0, 4);
-	month = buildNumber(s, 5, 2);
-	day   = buildNumber(s, 8, 2);
-	hour  = buildNumber(s, 11, 2);
-	min   = buildNumber(s, 14, 2);
-	sec   = buildNumber(s, 17, 2);
-	msec = buildNumber(s, 20, 3);	
-
-	tzhrs = buildNumber(s, 24, 2);
-	tzmin = buildNumber(s, 26, 2);
-	int mult = 1;
-	if(s.charAt(23) == '+') {
-	    mult = -1;
-	}
-	
-	Calendar cal = Calendar.getInstance();
-	cal.clear();
-	cal.set( Calendar.YEAR,  year );
-	cal.set( Calendar.MONTH, month - 1); // YOW!
-	cal.set( Calendar.DATE,  day ); 
-	cal.set( Calendar.HOUR_OF_DAY, hour ); 
-	cal.set( Calendar.MINUTE, min );
-	cal.set( Calendar.SECOND, sec );
-	cal.set( Calendar.MILLISECOND, msec ); 	    
-
-	// Still kinda unsure about all this...
-	//cal.add( Calendar.HOUR_OF_DAY, tzhrs * mult);
-	//cal.add( Calendar.MINUTE, tzmin * mult);
-
-	Date d = cal.getTime();					
-
-	return d;
-    }
 }
 
 

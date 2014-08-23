@@ -68,7 +68,7 @@ public class mongomtimport {
 
     private Map params = new HashMap();
     private DBCollection coll;
-    private int listsize;
+    private int bulksize;
     private int fileType;
     private List<FieldType> ftypes;
     private DB db;
@@ -86,6 +86,7 @@ public class mongomtimport {
     private final static int DATE_TYPE   = 4;
     private final static int OID_TYPE    = 5;
     private final static int BIN_TYPE    = 6;
+    private final static int DBL_TYPE    = 7;
 
     private final static int STRING_L_TYPE = -1;
     private final static int LONG_L_TYPE   = -2;
@@ -93,11 +94,11 @@ public class mongomtimport {
     private final static int DATE_L_TYPE   = -4;
     private final static int OID_L_TYPE    = -5;
     private final static int BIN_L_TYPE    = -6;
-
+    private final static int DBL_L_TYPE    = -7;
 
 
     // # of DBObjects to put in bulkops buffer before calling execute()
-    private final static int DEFAULT_LISTSIZE = 16;
+    private final static int DEFAULT_BULKSIZE = 16;
 
     private void reportError(String s, boolean forceExit) {
 	reportError(s);
@@ -105,9 +106,10 @@ public class mongomtimport {
     }
 
     private void reportError(String s) {
-	p(s);
+	p("error: " + s);
 	if((boolean)params.get("stopOnError")) {
-	    System.exit(1);
+	    // Likely a more graceful way than this but...
+	    System.exit(1); 
 	}
     }
 
@@ -122,11 +124,11 @@ public class mongomtimport {
     private void usage() {
 	p("usage: mongomtimport -d db -c collection [ options ] importFile [ importfile ... ]");
 	p("importFile is a CR-delimited JSON or CSV file just like mongoimport would consume.");
-	p("File will be divided down by numThreads and a starting region assigned to each thread.");
+	p("File will be divided down by n threads and a starting region assigned to each thread.");
 	p("Each region will be processed by a thread, parsing the CR-delimited JSON and adding");
-	p("the DBObject to a bulk operations buffer.  When the listSize is reached, the bulk insert is executed.");
-	p("Smallish document sizes (~256 bytes) will benefit from larger listSize");
-	p("Default numThreads is 1 and default listSize is " + DEFAULT_LISTSIZE);
+	p("the DBObject to a bulk operations buffer.  When the bulksize is reached, the bulk insert is executed.");
+	p("Smallish document sizes (~1K bytes) will benefit from larger bulksize");
+	p("Default threads is 1 and default bulksize is " + DEFAULT_BULKSIZE);
 	p("");
 	p("If only one importFile is specified and it names a directory, then ALL files in");
 	p("that directory will be processed.  All options will apply to all the files");
@@ -144,11 +146,12 @@ public class mongomtimport {
 	p("-c collname     name of collection in DB to load (default test)");
 
 	p("");
-	p("--parseOnly          perform all parsing actions but do NOT effect the target DB (no connect, no drop, no insert)");
+	p("--parseOnly       perform all parsing actions but do NOT effect the target DB (no connect, no drop, no insert)");
 	p("--drop            drop collection before inserting");
 	p("--type json|csv   identify type of file (json is default)");
 	p("--threads n       number of threads amongst which to divide the read/parse/insert logic");
-	p("--listSize n      size of bulkOperations buffer");
+	p("--bulksize n      size of bulkOperations buffer for each thread");
+	p("--stopOnError     do not try to continue if parsing/insert error occurs");
 
 
 	// FIELDS
@@ -157,16 +160,22 @@ public class mongomtimport {
 	p("                     --fields, then name the field str%d where %d is the zero-based index of the item");
 	p("--fields spec    (CSV only) spec is fldName[:fldType[:fldFmt]][, ...]");
 	p("                 fldType is optional and is string by default");
-	p("                 fldType one of string, int, long, date, oid, binary00");
+	p("                 fldType one of string, int, long, double, date, oid, binary00");
 	p("                 OR above with List appended e.g. stringList");
 	p("                 e.g. --fields 'name,age:int,bday:date:YYYYMMDD'");
 	p("                 Each item on line will be named fldName and the string value converted to the");
 	p("                 specified fldType.  *List types are special; items in the line must be quoted");
-	p("                 delimited and will be further split and the result assigned to an array.  Given:");
+	p("                 delimited and will be further split and the result assigned to an array.  So given:");
 	p("                        steve,\"dog,cat\"  ");
-	p("                 --fields \"name,pets\"  will produce { name: steve, pets: \"dog,cat\"} ");
-	p("                 --fields \"name,pets:stringList\" will produce { name: steve, pets: [ \"dog\", \"cat\"] }");
-	p("                 fldType date formats: YYYY-MM-DD (default), YYYYMMDD, YYMMDD (1970 cutoff), YYYYMM (assume day 1)");
+	p("                   --fields \"name,pets\"  will produce { name: steve, pets: \"dog,cat\"} ");
+	p("                 but");
+	p("                   --fields \"name,pets:stringList\" will produce { name: steve, pets: [ \"dog\", \"cat\"] }");
+	p("                 fldType date formats: YYYY-MM-DD (default), YYYYMMDD, YYMMDD (<70 add 2000 else add 1900), YYYYMM (assume day 1), ISO8601");
+	p("                 ISO8601 format accepts milliseconds.  If timezone is not explicitly declared");
+	p("                 using [+-]HHMM or Z (Z means +0000) then the timezone of the running process will be");
+	p("                 taken into account");
+
+
 
 	//  HANDLER!
 	p("");
@@ -317,12 +326,12 @@ public class mongomtimport {
 			    JsonParser2 p = new JsonParser2(s);
 			    Object value = p.parse(true);
 			    if(value == null) {
-				reportError("error: content " + s + " parses to null");
+				reportError("content " + s + " parses to null");
 			    }
 			    mm = (Map<String,Object>) value;
 
 			} catch(Exception e) {
-			    reportError("error: content " + s + ": " + e);
+			    reportError("content " + s + ": " + e);
 			}
 
 		    } else if(fileType == CUSTOM_TYPE) {
@@ -363,7 +372,7 @@ public class mongomtimport {
 				BasicDBObject bdo = new BasicDBObject(mm); // AUUGH!
 				
 				bo.insert(bdo);
-				if(0 == numRows % listsize) {
+				if(0 == numRows % bulksize) {
 				    BulkWriteResult rc = bo.execute();
 				    rr += rc.getInsertedCount();
 				    bo = null;
@@ -420,7 +429,7 @@ public class mongomtimport {
 	try {
 	    int nthreads = 1; // default is 1 thread
 
-	    listsize = DEFAULT_LISTSIZE;
+	    bulksize = DEFAULT_BULKSIZE;
 
 	    List<String> files = new ArrayList<String>();
 
@@ -467,9 +476,9 @@ public class mongomtimport {
 		    j++;
 		    params.put("pw", args[j]);
 
-		} else if(a.equals("--listSize")) {
+		} else if(a.equals("--bulksize")) {
 		    j++;
-		    listsize = Integer.parseInt(args[j]);
+		    bulksize = Integer.parseInt(args[j]);
 
 		} else if(a.equals("--drop")) {
 		    params.put("drop", true);
@@ -512,6 +521,9 @@ public class mongomtimport {
 		    usage();
 		    System.exit(0);
 
+		} else if(a.startsWith("--")) {
+		    reportError("unknown option [" + a + "]", true);
+
 		} else {
 		    // Not a -- arg; must be an importfile
 		    files.add(a);
@@ -538,7 +550,7 @@ public class mongomtimport {
 			mongoClient = new MongoClient(sa, mcs);
 			
 			if(mongoClient == null) {
-			    reportError("error: name+password supplied not valid for database " + dbname, true);
+			    reportError("name+password supplied not valid for database " + dbname, true);
 			}
 		    } else {
 			mongoClient = new MongoClient(sa);
@@ -548,11 +560,6 @@ public class mongomtimport {
 		DB db = mongoClient.getDB(dbname);
 		coll = db.getCollection( (String)params.get("coll") );
 
-		
-		if((boolean)params.get("drop")) {
-		    pp("dropping " + (String)params.get("coll"));
-		    coll.drop();
-		}
 	    } else {
 		pp("parseOnly mode; no database actions will be taken");
 	    }
@@ -625,6 +632,18 @@ public class mongomtimport {
 
 
 
+	    /***
+	     *   OK.  Pretty much everything that could go wrong upon setup is
+	     *   behind us.
+	     *   So now it is OK to drop the collection...
+	     */
+	    if(! (boolean) params.get("parseOnly")) {
+		if((boolean)params.get("drop")) {
+		    pp("dropping " + (String)params.get("coll"));
+		    coll.drop();
+		}
+	    }
+
 	    for(int kk = 0; kk < files.size(); kk++) {
 		pp("working on " + files.get(kk));
 		if(parser != null) { parser.init(); }
@@ -663,11 +682,26 @@ public class mongomtimport {
 	    break;
 
 	case INT_TYPE:
-	    ox = Integer.parseInt(input);
+	    try {
+		ox = Integer.parseInt(input);
+	    } catch(NumberFormatException ne) {
+		// Double.valueOf(input) will decode scientific notation....
+		ox = Integer.valueOf(Double.valueOf(input).intValue());
+	    }
+
 	    break;
 
 	case LONG_TYPE:
-	    ox = Long.parseLong(input);
+	    try {
+		ox = Long.parseLong(input);
+	    } catch(NumberFormatException ne) {
+		// Double.valueOf(input) will decode scientific notation....
+		ox = Long.valueOf(Double.valueOf(input).longValue());
+	    }
+	    break;
+
+	case DBL_TYPE:
+	    ox = Double.valueOf(input);
 	    break;
 
 	case OID_TYPE:
@@ -688,6 +722,7 @@ public class mongomtimport {
 
 	case INT_L_TYPE: 
 	case LONG_L_TYPE: 
+	case DBL_L_TYPE: 
 	case DATE_L_TYPE:
 	case BIN_L_TYPE:
 	{
@@ -717,7 +752,9 @@ public class mongomtimport {
 	return ox;
     }
 
-    private static List<FieldType> processFields(String ff) {
+
+
+    private List<FieldType> processFields(String ff) {
 	List<FieldType> fl = null;
 
 	try {
@@ -730,6 +767,7 @@ public class mongomtimport {
 		String fm = null; // no format hint
 
 		int tt = STRING_TYPE;
+
 		if(fn.contains(":")) {
 		    CSVReader csvr2 = new CSVReader(new StringReader(fn), ':');
 		    String[] ftt = csvr2.readNext();
@@ -747,6 +785,8 @@ public class mongomtimport {
 		    tt = INT_TYPE;
 		} else if(tn.equals("long")) {
 		    tt = LONG_TYPE;
+		} else if(tn.equals("double")) {
+		    tt = DBL_TYPE;
 		} else if(tn.equals("oid")) {
 		    tt = OID_TYPE;
 		} else if(tn.equals("binary00")) {
@@ -763,6 +803,8 @@ public class mongomtimport {
 		    tt = OID_L_TYPE;
 		} else if(tn.equals("binary00List")) {
 		    tt = BIN_L_TYPE;
+		} else {
+		    reportError("unknown field type [" + tn + "]", true);
 		}
 
 		fl.add(new FieldType(fn, tt, fm));
@@ -841,7 +883,7 @@ public class mongomtimport {
 	     *  At this point, startPos[] is loaded with the offsets.
 	     *  Spawn multiple threads and go!
 	     */
-	    pp("running " + nthreads + " threads, listsize " + listsize);
+	    pp("running " + nthreads + " threads, bulksize " + bulksize);
 	    
 	    ExecutorService es = Executors.newCachedThreadPool();	     
 	    Set<Future<Integer>> set = new HashSet<Future<Integer>>();
@@ -888,144 +930,54 @@ public class mongomtimport {
 
 
 
-    // buildNumber(s, 0, 4);
-    private static int buildNumber(String s, int idx, int len) {
-	int item = 0;
-
-	// k is going 0 to len-1. i.e. 0 to 3 for year...
-	for(int k = 0; k < len; k++) {
-
-	    // Given 2013, jump to 3 
-	    int nx = idx + (len-1) - k;
-
-	    char c = s.charAt(nx);
-	    switch(k) {
-	    case 3:
-		item += (c - '0') * 1000;
-		break;
-	    case 2:
-		item += (c - '0') * 100;
-		break;
-	    case 1:
-		item += (c - '0') * 10;
-		break;
-	    case 0:
-		item += (c - '0');
-		break;
-	    }
-	}
-
-	return item;
-    }
-
     private static Date cvtDate(String s, String fmt) {
 
 	Date d = null;
+	Calendar cal = null;
+	int year  = 0;
+	int month = 0;
+	int day   = 0;
+
+	// Organize logic for faster decisions, so most common
+	// things up front...
 
 	if(fmt == null || fmt.equals("YYYY-MM-DD")) {
-	    int year  = buildNumber(s, 0, 4);
-	    int month = buildNumber(s, 5, 2);
-	    int day   = buildNumber(s, 8, 2);
-	    Calendar cal = Calendar.getInstance();
-	    cal.clear();
-	    cal.set( Calendar.YEAR,  year );
-	    cal.set( Calendar.MONTH, month - 1);
-	    cal.set( Calendar.DATE,  day ); 
-	    d = cal.getTime();					
+	    year  = Utils.buildNumber(s, 0, 4);
+	    month = Utils.buildNumber(s, 5, 2);
+	    day   = Utils.buildNumber(s, 8, 2);
 
 	} else if(fmt.equals("YYYYMMDD")) {
-	    int year  = buildNumber(s, 0, 4);
-	    int month = buildNumber(s, 4, 2);
-	    int day   = buildNumber(s, 6, 2);
-	    Calendar cal = Calendar.getInstance();
-	    cal.clear();
-	    cal.set( Calendar.YEAR,  year );
-	    cal.set( Calendar.MONTH, month - 1);
-	    cal.set( Calendar.DATE,  day ); 
-	    d = cal.getTime();					
+	    year  = Utils.buildNumber(s, 0, 4);
+	    month = Utils.buildNumber(s, 4, 2);
+	    day   = Utils.buildNumber(s, 6, 2);
 
 	} else if(fmt.equals("YYMMDD")) {
-	    int year  = buildNumber(s, 0, 2);
+	    year  = Utils.buildNumber(s, 0, 2);
 	    if(year < 70) { 
 		year += 2000; // 140203, 650203 -> 3-Feb-2014, 3-Feb-2065
 	    } else { 
-		year += 1900; // 700203, 960203 -> 3-Feb-2070, 3-Feb-1996
+		year += 1900; // 700203, 960203 -> 3-Feb-1970, 3-Feb-1996
 	    }
-	    int month = buildNumber(s, 2, 2);
-	    int day   = buildNumber(s, 4, 2);
-	    Calendar cal = Calendar.getInstance();
-	    cal.clear();
-	    cal.set( Calendar.YEAR,  year );
-	    cal.set( Calendar.MONTH, month - 1);
-	    cal.set( Calendar.DATE,  day ); 
-	    d = cal.getTime();					
+	    month = Utils.buildNumber(s, 2, 2);
+	    day   = Utils.buildNumber(s, 4, 2);
 
 	} else if(fmt.equals("YYYYMM")) { // 201405 becomes 1-May-2014
-	    int year  = buildNumber(s, 0, 4);
-	    int month = buildNumber(s, 4, 2);
-	    int day   = 1; // YOW!
-	    Calendar cal = Calendar.getInstance();
+	    year  = Utils.buildNumber(s, 0, 4);
+	    month = Utils.buildNumber(s, 4, 2);
+	    day   = 1; // YOW!
+	}
+
+	if(year != 0) {
+	    cal = Calendar.getInstance();
 	    cal.clear();
 	    cal.set( Calendar.YEAR,  year );
 	    cal.set( Calendar.MONTH, month - 1);
 	    cal.set( Calendar.DATE,  day ); 
 	    d = cal.getTime();					
-
-	} else if(fmt.equals("YYYY-MM-DDTHH:MM:SS.SSS-HHMM")) {
-	    d = cvtMongoStrDateToDate(s);
+	    
+	} else if(fmt != null && fmt.equals("ISO8601")) {
+	    d = Utils.cvtISODateToDate(s);
 	}
-
-	return d;
-    }
-
-    /**
-     *  2014-06-23T09:26:26.214-0400
-     *  0123456789012345678901234567890
-     *            1         2     
-     */
-    private static Date cvtMongoStrDateToDate(String s) {
-	int year = 0;
-	int month = 0;
-	int day = 0;
-	
-	int hour = 0;
-	int min = 0;
-	int sec = 0;
-	int msec = 0;
-	int tzhrs = 0;
-	int tzmin = 0;
-
-	
-	year  = buildNumber(s, 0, 4);
-	month = buildNumber(s, 5, 2);
-	day   = buildNumber(s, 8, 2);
-	hour  = buildNumber(s, 11, 2);
-	min   = buildNumber(s, 14, 2);
-	sec   = buildNumber(s, 17, 2);
-	msec = buildNumber(s, 20, 3);	
-
-	tzhrs = buildNumber(s, 24, 2);
-	tzmin = buildNumber(s, 26, 2);
-	int mult = 1;
-	if(s.charAt(23) == '+') {
-	    mult = -1;
-	}
-	
-	Calendar cal = Calendar.getInstance();
-	cal.clear();
-	cal.set( Calendar.YEAR,  year );
-	cal.set( Calendar.MONTH, month - 1); // YOW!
-	cal.set( Calendar.DATE,  day ); 
-	cal.set( Calendar.HOUR_OF_DAY, hour ); 
-	cal.set( Calendar.MINUTE, min );
-	cal.set( Calendar.SECOND, sec );
-	cal.set( Calendar.MILLISECOND, msec ); 	    
-
-	// Still kinda unsure about all this...
-	//cal.add( Calendar.HOUR_OF_DAY, tzhrs * mult);
-	//cal.add( Calendar.MINUTE, tzmin * mult);
-
-	Date d = cal.getTime();					
 
 	return d;
     }
