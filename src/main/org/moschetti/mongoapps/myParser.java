@@ -9,7 +9,7 @@ class myParser implements MongoImportParser {
 	return count;
     }
 
-    public void init() { count = 0; }
+    public void init(String fileName) { count = 0; }
 
     public boolean process(String s, java.util.Map m) {
 	long x = inc();
@@ -23,5 +23,5 @@ class myParser implements MongoImportParser {
 	return true;
     }
 
-    public void done() {}
+    public void done(String fileName) {}
 }

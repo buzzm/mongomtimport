@@ -71,14 +71,19 @@ public class mongomtimport {
     private int bulksize;
     private int fileType;
     private List<FieldType> ftypes;
+    private List<FieldColumn> fcols;
     private DB db;
+    private boolean trim = false;
     private MongoImportHandler handler = null;
     private MongoImportParser parser = null;
 
+    private char separator = ',';  // not final because could change...
+
 
     private final static int JSON_TYPE = 0;
-    private final static int CSV_TYPE = 1;
-    private final static int CUSTOM_TYPE = 2;
+    private final static int DELIM_TYPE = 1;
+    private final static int FIXED_TYPE = 2;
+    private final static int CUSTOM_TYPE = 3;
 
     private final static int STRING_TYPE = 1;
     private final static int LONG_TYPE   = 2;
@@ -95,6 +100,9 @@ public class mongomtimport {
     private final static int OID_L_TYPE    = -5;
     private final static int BIN_L_TYPE    = -6;
     private final static int DBL_L_TYPE    = -7;
+
+
+
 
 
     // # of DBObjects to put in bulkops buffer before calling execute()
@@ -123,7 +131,7 @@ public class mongomtimport {
 
     private void usage() {
 	p("usage: mongomtimport -d db -c collection [ options ] importFile [ importfile ... ]");
-	p("importFile is a CR-delimited JSON or CSV file just like mongoimport would consume.");
+	p("importFile is a CR-delimited JSON, delimited, or fixed-width file.");
 	p("File will be divided down by n threads and a starting region assigned to each thread.");
 	p("Each region will be processed by a thread, parsing the CR-delimited JSON and adding");
 	p("the DBObject to a bulk operations buffer.  When the bulksize is reached, the bulk insert is executed.");
@@ -133,6 +141,7 @@ public class mongomtimport {
 	p("If only one importFile is specified and it names a directory, then ALL files in");
 	p("that directory will be processed.  All options will apply to all the files");
 	p("processed in that directory");
+	p("Empty lines (CR only) are permitted but will be ignored");
 
 	p("");
 	p("options:");
@@ -148,7 +157,12 @@ public class mongomtimport {
 	p("");
 	p("--parseOnly       perform all parsing actions but do NOT effect the target DB (no connect, no drop, no insert)");
 	p("--drop            drop collection before inserting");
-	p("--type json|csv   identify type of file (json is default)");
+	p("--type json|delim|fixed   identify type of file (json is default)");
+	p("--separator c     char to use as field and embedded list (see *List types) (default is comma)");
+	p("--trim            (fixed and delim only) post-parse, strip leading and trailing whitespace from items.");
+	p("                  If the field is trimmed to size 0, it will not be added.");
+	p("                  Is a noop if a custom parser is in use.");
+	p("                  Highly recommended for fixed length imports.");
 	p("--threads n       number of threads amongst which to divide the read/parse/insert logic");
 	p("--bulksize n      size of bulkOperations buffer for each thread");
 	p("--stopOnError     do not try to continue if parsing/insert error occurs");
@@ -156,11 +170,13 @@ public class mongomtimport {
 
 	// FIELDS
 	p("");
-	p("--fieldPrefix str    (CSV only) If --fields not present OR number of items on current line > spec in");
+	p("--fieldPrefix str    (noop for JSON) If --fields not present OR number of items on current line > spec in");
 	p("                     --fields, then name the field str%d where %d is the zero-based index of the item");
-	p("--fields spec    (CSV only) spec is fldName[:fldType[:fldFmt]][, ...]");
+
+	p("");
+	p("--fields spec    (noop for JSON) spec is fldName[:fldType[:fldFmt]][, ...]");
 	p("                 fldType is optional and is string by default");
-	p("                 fldType one of string, int, long, double, date, oid, binary00");
+	p("                 fldType one of string, int, long, double, date, binary00");
 	p("                 OR above with List appended e.g. stringList");
 	p("                 e.g. --fields 'name,age:int,bday:date:YYYYMMDD'");
 	p("                 Each item on line will be named fldName and the string value converted to the");
@@ -175,18 +191,31 @@ public class mongomtimport {
 	p("                 using [+-]HHMM or Z (Z means +0000) then the timezone of the running process will be");
 	p("                 taken into account");
 
+	p("");
+	p("--fieldColumns   (fixed type only and required) A comma separated list of start and end position pairs where 1 (not 0) is the first column.");
+	p("                 Dash (e.g. 3-6) defines start and end position, inclusive");
+	p("                 Plus (e.g. 3+4) defines start position and length");
+	p("                 Single columns may be represented without the dash or plus.");
+	p("                     --fieldColumns 3-5,6-9,24,30-45");
+	p("                 is equivalent to");
+	p("                     --fieldColumns 3+3,6+4,24,30+16");
+
+	p("                 Use --fields to name and type extracted columns otherwise default behavior is same as delimited file.");
+	p("                 *List fields will use the separator character to further break up extracted columns");
+
+
 
 
 	//  HANDLER!
 	p("");
 	p("--handler classname      load a class using standard classloader semantics that implements MongoImportHandler:");
 	p("                        public interface MongoImportHandler {");
-	p("                          void init();");
+	p("                          void init(String fileName);");
 	p("                          boolean process(java.util.Map);");
-	p("                          void done();");   
+	p("                          void done(String fileName);");   
 	p("                        }");
 	p("                        init() is called once at the start of each file to be processed.  ");
-	p("                        process(Map) is called with the parsed Map (post-mongoDB JSON type convention conversion)");
+	p("                        process() is called with the parsed Map (post-mongoDB JSON type convention conversion)");
 	p("                        and any operation can be performed on the map.  If process() returns false the map ");
 	p("                        will not be inserted.");
 	p("                        done() is called once following processing of all items.");
@@ -198,12 +227,12 @@ public class mongomtimport {
 	p("");
 	p("--parser classname      load a class using standard classloader semantics that implements MongoImportParser:");
 	p("                        public interface MongoImportParser {");
-	p("                          void init();");
+	p("                          void init(String fileName);");
 	p("                          boolean process(String, java.util.Map);");
-	p("                          void done();");   
+	p("                          void done(String fileName);");   
 	p("                        }");
 	p("                        init() is called once at the start of each file to be processed.  ");
-	p("                        process(String, Map) is called with the UNparsed line of data read from the file and ");
+	p("                        process() is called with the UNparsed line of data read from the file and ");
 	p("                        an empty Map.  Any logic can be performed to load name-value content into the map.");
 	p("                        If process() returns false this signals the parser failed to process the line of data.");
 	p("                        done() is called once following processing of all items.");
@@ -213,6 +242,17 @@ public class mongomtimport {
 
 
 	p("--verbose        chatty output");
+    }
+
+
+    private static class FieldColumn {
+	private int startIdx; // zero based internally...
+	private int len; 
+
+	public FieldColumn(int startIdx, int len) {
+	    this.startIdx = startIdx;
+	    this.len = len;
+	}
     }
 
     private static class FieldType {
@@ -297,27 +337,66 @@ public class mongomtimport {
 			continue;
 		    }
 
-		    if(fileType == CSV_TYPE) {
+		    if(fileType == DELIM_TYPE) {
 			CSVReader csvr = null;
 
-			csvr = new CSVReader(new StringReader(s));
+			csvr = new CSVReader(new StringReader(s), separator);
 
 			String[] toks = csvr.readNext();
 			if(toks != null) {
 			    mm = new HashMap(); 
 			    for(int jj = 0; jj < toks.length; jj++) {
-				if(toks[jj].length() == 0) {
+				String tok = toks[jj];
+				
+				if(trim) {
+				    tok = tok.trim();
+				}
+
+				if(tok.length() == 0) {
 				    continue;
 				}
 				if(ftypes != null && jj < maxFtypes) {
 				    FieldType ft = ftypes.get(jj);
-				    Object o = processItem(ft, toks[jj]);
+				    Object o = processItem(ft, tok);
 				    if(o != null) {
 					mm.put(ft.name, o);
 				    }
 				} else {
-				    mm.put(fldpfx + jj, toks[jj]);
+				    mm.put(fldpfx + jj, tok);
 				}
+			    }
+			}
+
+		    } else if(fileType == FIXED_TYPE) {
+			mm = new HashMap(); 
+			int nfcol = fcols.size();
+			int maxs = s.length();
+
+			for(int jj = 0; jj < nfcol; jj++) {
+			    int eidx = (fcols.get(jj).startIdx + fcols.get(jj).len);
+			    if(eidx > maxs) {
+				eidx = maxs;
+			    }
+
+			    //System.out.println(jj + ": " + fcols.get(jj).startIdx + "," + eidx);
+			    String tok = s.substring(fcols.get(jj).startIdx, eidx);
+			    
+			    if(trim) {
+				tok = tok.trim();
+			    }
+
+			    if(tok.length() == 0) {
+				continue;
+			    }
+
+			    if(ftypes != null && jj < maxFtypes) {
+				FieldType ft = ftypes.get(jj);
+				Object o = processItem(ft, tok);
+				if(o != null) {
+				    mm.put(ft.name, o);
+				}
+			    } else {
+				mm.put(fldpfx + jj, tok);
 			    }
 			}
 			
@@ -493,6 +572,10 @@ public class mongomtimport {
 		    j++;
 		    params.put("fields", args[j]);
 
+		} else if(a.equals("--fieldColumns")) {
+		    j++;
+		    params.put("fieldColumns", args[j]);
+
 		} else if(a.equals("--handler")) {
 		    j++;
 		    params.put("handler", args[j]);
@@ -508,14 +591,26 @@ public class mongomtimport {
 		} else if(a.equals("--stopOnError")) {
 		    params.put("stopOnError", true);
 
+		} else if(a.equals("--trim")) {
+		    trim = true;
+
 		} else if(a.equals("--type")) {
 		    j++;
 		    String s = args[j].toLowerCase();
 		    if(s.equals("json")) {
 			params.put("type", JSON_TYPE);
-		    } else if(s.equals("csv")) {
-			params.put("type", CSV_TYPE);
+		    } else if(s.equals("delim")) {
+			params.put("type", DELIM_TYPE);
+		    } else if(s.equals("fixed")) {
+			params.put("type", FIXED_TYPE);
+		    } else {
+			reportError("unknown --type option [" + a + "]", true);
 		    }
+
+		} else if(a.equals("--separator")) {
+		    j++;
+		    String s = args[j].toLowerCase();
+		    separator = s.charAt(0); // grab a single char!
 
 		} else if(a.equals("--help") || a.equals("-help")) {
 		    usage();
@@ -594,8 +689,18 @@ public class mongomtimport {
 
 	    fileType = (int) params.get("type");
 
+	    if(fileType == FIXED_TYPE) {
+		String ff = (String) params.get("fieldColumns");
+		if(ff != null) {
+		    fcols = processColumns(ff);
+		} else {
+		    reportError("--type fixed requires --fieldColumns parameter", true);
+		}	
+	    }
+
+
 	    ftypes = null;
-	    if(fileType == CSV_TYPE) {
+	    if(fileType == DELIM_TYPE || fileType == FIXED_TYPE) {
 		String ff = (String) params.get("fields");
 		if(ff != null) {
 		    ftypes = processFields(ff);
@@ -645,12 +750,13 @@ public class mongomtimport {
 	    }
 
 	    for(int kk = 0; kk < files.size(); kk++) {
-		pp("working on " + files.get(kk));
-		if(parser != null) { parser.init(); }
-		if(handler != null) { handler.init(); }
-		totProc += processFile(files.get(kk), nthreads);
-		if(handler != null) { handler.done(); }
-		if(parser != null) { parser.done(); }
+		String fname = files.get(kk);
+		pp("working on " + fname);
+		if(parser != null) { parser.init(fname); }
+		if(handler != null) { handler.init(fname); }
+		totProc += processFile(fname, nthreads);
+		if(handler != null) { handler.done(fname); }
+		if(parser != null) { parser.done(fname); }
 	    }
 
 	    java.util.Date end = new java.util.Date();
@@ -667,7 +773,7 @@ public class mongomtimport {
     }
 
 
-    private static Object processItem(FieldType ft, String input) 
+    private Object processItem(FieldType ft, String input) 
 	throws IOException
     {
 	Object ox = null;
@@ -714,7 +820,7 @@ public class mongomtimport {
 	}
 
 	case STRING_L_TYPE: { // optimized performance here...
-	    CSVReader xx = new CSVReader(new StringReader(input));
+	    CSVReader xx = new CSVReader(new StringReader(input), separator);
 	    String[] vv = xx.readNext();
 	    ox = vv;
 	    break;
@@ -726,7 +832,7 @@ public class mongomtimport {
 	case DATE_L_TYPE:
 	case BIN_L_TYPE:
 	{
-	    CSVReader xx = new CSVReader(new StringReader(input));
+	    CSVReader xx = new CSVReader(new StringReader(input), separator);
 	    String[] vv = xx.readNext();
 	    List ix = new ArrayList(vv.length);
 
@@ -811,6 +917,59 @@ public class mongomtimport {
 	    }
 	} catch(Exception e) {
 	    System.out.println("processField() epic fail: " + e);
+	}
+
+	return fl;
+    }
+
+
+    /**
+     *   1-20,35-40,42,45-
+     */
+    private List<FieldColumn> processColumns(String ff) {
+	List<FieldColumn> fl = null;
+
+	try {
+	    CSVReader csvr = new CSVReader(new StringReader(ff));
+	    String[] flds = csvr.readNext();
+
+	    fl = new ArrayList<FieldColumn>();
+	    for(int kk = 0; kk < flds.length; kk++) {
+		String fn = flds[kk];
+
+		int startIdx = -1;
+		int len = -1;
+		char sep = 0;
+
+		if(fn.contains("-")) {
+		    sep = '-';
+		} else if(fn.contains("+")) {
+		    sep = '+';
+		}
+
+		if(sep != 0) {
+		    CSVReader csvr2 = new CSVReader(new StringReader(fn), sep);
+		    String[] ftt = csvr2.readNext();
+		
+		    startIdx = Integer.parseInt(ftt[0]);
+		    len = Integer.parseInt(ftt[1]);
+		} else { // is a single!
+		    startIdx = Integer.parseInt(fn);
+		    len = 1;
+		}
+
+		if(sep == '-') {
+		    // 3-6  means 4 total, so (len-startIdx)+1
+		    len = (len - startIdx) + 1;
+		} 
+		// noop for sep = '-'
+
+		startIdx--;  // back up to 0-based idx instead of 1-based pos
+
+		fl.add(new FieldColumn(startIdx, len));
+	    }
+	} catch(Exception e) {
+	    reportError("processField() fail: " + e, true);
 	}
 
 	return fl;
