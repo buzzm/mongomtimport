@@ -9,6 +9,7 @@ import com.mongodb.DBObject;
 import com.mongodb.MongoCredential;
 import com.mongodb.ServerAddress;
 
+import com.mongodb.WriteConcern;
 import com.mongodb.BulkWriteOperation;
 import com.mongodb.BulkWriteResult;
 
@@ -79,6 +80,8 @@ public class mongomtimport {
 
     private char separator = ',';  // not final because could change...
 
+    private WriteConcern wc = null;
+    private boolean fetchInsertCount = true;
 
     private final static int JSON_TYPE = 0;
     private final static int DELIM_TYPE = 1;
@@ -166,6 +169,7 @@ public class mongomtimport {
 	p("--threads n       number of threads amongst which to divide the read/parse/insert logic");
 	p("--bulksize n      size of bulkOperations buffer for each thread");
 	p("--stopOnError     do not try to continue if parsing/insert error occurs");
+	p("--writeConcern    JSON doc of write concern options e.g. {\"w\": 0, \"wtimeout\": 0, \"fsync\": false, \"j\": false}");
 
 
 	// FIELDS
@@ -306,14 +310,6 @@ public class mongomtimport {
 		
 		BulkWriteOperation bo = null;
 
-		// level 0 is what mongoimport uses...?
-		/** 
-		 *  Testing with and without WriteConcern reveals on my MBP
-		 *  that the perf is the same.
-		 *  So do not use it for now...
-		 */
-		//WriteConcern wc = new WriteConcern(0); 
-
 		s = null;
 
 		int rr = 0;
@@ -452,8 +448,10 @@ public class mongomtimport {
 				
 				bo.insert(bdo);
 				if(0 == numRows % bulksize) {
-				    BulkWriteResult rc = bo.execute();
-				    rr += rc.getInsertedCount();
+				    BulkWriteResult rc = bo.execute(wc);
+				    if(fetchInsertCount) {
+					rr += rc.getInsertedCount();
+				    }
 				    bo = null;
 				}
 			    }
@@ -476,15 +474,21 @@ public class mongomtimport {
 
 
 		if(bo != null) {
-		    BulkWriteResult rc = bo.execute();
-		    rr += rc.getInsertedCount();
+		    BulkWriteResult rc = bo.execute(wc);
+		    if(fetchInsertCount) {
+			rr += rc.getInsertedCount();
+		    }
 		    bo = null;
 		}
 
 
 		buffrd.close();
 
-		pp(this.tnum + " wrote " + rr + " of " + numRows);
+		if(fetchInsertCount) {
+		    pp(this.tnum + " wrote " + rr + " of " + numRows);
+		} else {
+		    pp(this.tnum + " probably wrote " + numRows + " of " + numRows);
+		}
 
 	    } catch(Exception e) {
 		System.out.println("!!!: some sort of fail in thread: " + e + "; last doc read: " + s);
@@ -524,6 +528,7 @@ public class mongomtimport {
 	    params.put("drop", false);
 	    params.put("type", JSON_TYPE);
 	    params.put("fieldPrefix", "field");
+
 
 	    for(int j = 0; j < args.length; j++) {
 		String a = args[j];
@@ -591,6 +596,16 @@ public class mongomtimport {
 		} else if(a.equals("--stopOnError")) {
 		    params.put("stopOnError", true);
 
+
+		} else if(a.equals("--writeConcern")) {
+		    j++;
+		    JsonParser2 p = new JsonParser2(args[j]);
+		    Object value = p.parse(true);
+		    if(value == null) {
+			reportError("--writeConcern " + args[j] + " parses to null", true);
+		    }
+		    params.put("writeConcern", (Map)value);
+		    
 		} else if(a.equals("--trim")) {
 		    trim = true;
 
@@ -657,6 +672,43 @@ public class mongomtimport {
 
 	    } else {
 		pp("parseOnly mode; no database actions will be taken");
+	    }
+
+
+	    { // WriteConcern treatment
+		// Stolen from --verbose output on new go-based mongoimport
+		int wc_w         = 1;
+		int wc_wtimeout  = 0;
+		boolean wc_fsync = false;
+		boolean wc_j     = false;
+
+		Map pwc = (Map) params.get("writeConcern");
+		if(pwc != null) {
+		    // {w: 3, wtimeout: 500, fsync: true, j: 1}
+		    if(pwc.containsKey("w")) {
+			wc_w = (Integer) pwc.get("w");
+			if(wc_w == 0) {
+			    fetchInsertCount = false;
+			}
+		    }
+		    if(pwc.containsKey("wtimeout")) {
+			wc_wtimeout = (Integer) pwc.get("wtimeout");
+		    }
+		    if(pwc.containsKey("fsync")) {
+			wc_fsync = (Boolean) pwc.get("fsync");
+		    }
+		    if(pwc.containsKey("j")) {
+			wc_j = (Boolean) pwc.get("j");
+		    }
+		}
+
+		wc = new WriteConcern(wc_w, wc_wtimeout, wc_fsync, wc_j);
+
+		pp("using writeConcern w:" + wc_w 
+		   + ",wtimeout:" + wc_wtimeout
+		   + ",fsync:" + wc_fsync
+		   + ",j:" + wc_j
+		   );
 	    }
 
 

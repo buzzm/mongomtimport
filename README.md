@@ -1,7 +1,14 @@
 mongomtimport
 =============
 
-Multithreaded Java file loader for mongoDB
+Multithreaded Java file loader for mongoDB.
+
+NOTE:  Until v2.8, this loader was significantly faster than the factory 
+version.  The mongoimport tool in v2.8 (in fact all the import/export utils) 
+waswere rewritten with both the bulk API and multiple threads.  The new v2.8
+utils are now slightly faster than this loader.  This loader, being Java based,
+still offers additional flexibility for custom parsers and handlers and has
+a few more features for declaring types in CSV, TSV, and fixed field files.
 
 Basic use:
 
@@ -24,6 +31,7 @@ Default threads is 1 and default bulksize is 16
 If only one importFile is specified and it names a directory, then ALL files in
 that directory will be processed.  All options will apply to all the files
 processed in that directory
+Empty lines (CR only) are permitted but will be ignored
 
 options:
 --host | -h     name of host e.g. machine.firm.com (default localhost
@@ -45,6 +53,7 @@ options:
 --threads n       number of threads amongst which to divide the read/parse/insert logic
 --bulksize n      size of bulkOperations buffer for each thread
 --stopOnError     do not try to continue if parsing/insert error occurs
+--writeConcern    JSON doc of write concern options e.g. {"w": 0, "wtimeout": 0, "fsync": false, "j": false}
 
 --fieldPrefix str    (noop for JSON) If --fields not present OR number of items on current line > spec in
                      --fields, then name the field str%d where %d is the zero-based index of the item
@@ -103,6 +112,7 @@ options:
                         parser is called by all threads so take care to add synchronization where necessary.
                         parser overrides the --type option.
 --verbose        chatty output
+
 ```
 
 To create your own handler or parser, make sure MongoImportHandler.java or
