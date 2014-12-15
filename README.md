@@ -5,12 +5,15 @@ Multithreaded Java file loader for mongoDB.
 
 NOTE:  Until v2.8, this loader was significantly faster than the factory 
 version.  The mongoimport tool in v2.8 (in fact all the import/export utils) 
-waswere rewritten with both the bulk API and multiple threads.  The new v2.8
-utils are now slightly faster than this loader.  This loader, being Java based,
-still offers additional flexibility for custom parsers and handlers and has
-a few more features for declaring types in CSV, TSV, and fixed field files.
+were rewritten employing both the bulk API and multiple threads.  The new v2.8
+utils are now slightly faster than this loader for small (<512 bytes) records.
+The performance for larger records is roughly the same, and being Java based, 
+this loader still offers additional flexibility for custom parsers and handlers
+and has a few more features for declaring types in CSV, TSV, and fixed
+field files.
 
-Basic use:
+Basic Use
+---------
 
 ```
 ant dist
@@ -126,3 +129,18 @@ $ javac myHandler.java
 $ jar cvf myHandlers.jar myHandler.class
 $ java -cp myHandlers.jar:mongo-java-driver-2.12.0.jar:dist/lib/mongoapps.jar mongomtimport ...
 ```
+
+License
+-------
+Copyright (C) {2014} {Buzz Moschetti}
+
+This program is free software; you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation; either version 2 of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+
+Disclaimer
+----------
+
+This software is not supported by MongoDB, Inc. under any of their commercial support subscriptions or otherwise. Any usage of Firehose is at your own risk. Bug reports, feature requests and questions can be posted in the Issues section here on github.
+
