@@ -236,7 +236,7 @@ public class JsonParser2 {
     readRequiredChar( 'l' );
     readRequiredChar( 'l' );
     //return JsonValue.NULL;
-    return "null";
+    return null;
   }
 
   private Object readTrue() throws IOException {
