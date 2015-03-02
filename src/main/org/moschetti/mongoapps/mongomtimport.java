@@ -13,7 +13,6 @@ import com.mongodb.WriteConcern;
 import com.mongodb.BulkWriteOperation;
 import com.mongodb.BulkWriteResult;
 
-
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -68,6 +67,7 @@ import java.io.IOException;
 public class mongomtimport {
 
     private Map params = new HashMap();
+
     private DBCollection coll;
     private int bulksize;
     private int fileType;
@@ -304,11 +304,14 @@ public class mongomtimport {
 
 	    try {
 		long qpos = this.startPos;
+
+		java.util.Date start = new java.util.Date();
 		
 		FileReader fr = new FileReader(this.fname);
 		BufferedReader buffrd = new BufferedReader(fr);
 		
 		BulkWriteOperation bo = null;
+		//List<DBObject> inslist = new ArrayList<DBObject>(bulksize);
 
 		s = null;
 
@@ -470,7 +473,7 @@ public class mongomtimport {
 			    break; // reached the next marker
 			}
 		    }
-		}
+		} // end of while(read input) loop
 
 
 		if(bo != null) {
@@ -481,13 +484,19 @@ public class mongomtimport {
 		    bo = null;
 		}
 
-
 		buffrd.close();
 
-		if(fetchInsertCount) {
-		    pp(this.tnum + " wrote " + rr + " of " + numRows);
-		} else {
-		    pp(this.tnum + " probably wrote " + numRows + " of " + numRows);
+		java.util.Date end = new java.util.Date();
+		long diff = end.getTime() - start.getTime();
+		double psec = ((double)numRows / ((double)diff / 1000));
+
+		{
+		    String s4 = " wrote ";
+		    if(!fetchInsertCount) {
+			s4 = " probably wrote ";
+			rr = numRows;
+		    }
+		    pp(this.tnum + s4 + rr + " of " + numRows + " in " + diff + " ms; " + (int)psec + " ins/sec");
 		}
 
 	    } catch(Exception e) {
@@ -647,6 +656,15 @@ public class mongomtimport {
 		ServerAddress sa = new ServerAddress((String)params.get("host"),(Integer)params.get("port"));
 
 		String dbname = (String)params.get("db");
+
+		/**
+		   Unclear if we need to go to this level yet.  More than
+		   100 threads on one import seems...heavy.
+
+		    MongoClientOptions options = MongoClientOptions.builder()
+			.connectionsPerHost(100)
+			.build();
+		**/
 		
 		{
 		    String uname = (String)params.get("uname");
@@ -668,6 +686,7 @@ public class mongomtimport {
 		}
 
 		DB db = mongoClient.getDB(dbname);
+
 		coll = db.getCollection( (String)params.get("coll") );
 
 	    } else {
@@ -816,7 +835,7 @@ public class mongomtimport {
 
 	    pp(totProc + " items; millis: " + diff);
 	    double psec = ((double)totProc / ((double)diff / 1000));
-	    pp("performance " + psec);
+	    pp("performance " + (int)psec + " ins/sec");
 
 	} catch (Exception e) {
 	    System.out.println("go() epic fail: " + e);
