@@ -3,14 +3,12 @@ mongomtimport
 
 Multithreaded Java file loader for mongoDB.
 
-NOTE:  Until v2.8, this loader was significantly faster than the factory 
-version.  The mongoimport tool in v2.8 (in fact all the import/export utils) 
-were rewritten employing both the bulk API and multiple threads.  The new v2.8
-utils are now slightly faster than this loader for small (<512 bytes) records.
-The performance for larger records is roughly the same, and being Java based, 
-this loader still offers additional flexibility for custom parsers and handlers
-and has a few more features for declaring types in CSV, TSV, and fixed
-field files.
+NOTE:  Until v3.0, this loader was significantly faster than the factory 
+version.  The mongoimport tool in v3.0 (in fact all the import/export utils) 
+were rewritten employing both the bulk API and multiple threads and 
+performance has improved substantially.  This loader still offers additional
+flexibility for custom parsers and handlers and has a few more features for
+declaring types in CSV, TSV, and fixed field files.
 
 Basic Use
 ---------
